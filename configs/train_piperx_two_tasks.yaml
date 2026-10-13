@@ -1,0 +1,25 @@
+# 8 GPUs x 8 samples/GPU x 4 accumulation = effective batch 256.
+defaults:
+  - train
+  - override dataloader: piperx_two_tasks
+  - _self_
+training:
+  debug: false
+  num_epochs: 5
+  max_steps: null
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-4
+  mixed_precision: bf16
+  zero_stage: 2
+  use_gradient_checkpointing: true
+  dataset_num_workers: 8
+  finetune_ckpt_path: /2025233210/lmx/OpenWAM/assets/openwam_ckpt/openwam_alpha/OpenWAM-Alpha-Pretrain-Foundation-Model
+  resume_ckpt_path: null
+  output_path: outputs/piperx_two_tasks_alpha
+  # save_steps counts micro-batches, not optimizer updates.
+  save_steps: 2000
+  keep_last_k_ckpts: 2
+project:
+  wandb:
+    run_name: piperx_fill_pen_holder_stack_bowls

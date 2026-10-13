@@ -1,0 +1,31 @@
+# Dual Piper-X LeRobot v3; all selected teleop episodes are successful.
+type: piperx_lerobot
+dataset_dir: data/v3/multitask_merged_v1
+# fill-pen-holder and stack-bowls; original IDs remain intact.
+task_indices: [0, 4]
+excluded_episode_indices: [24]
+action_mode: eef
+unify_action: true
+unify_action_map: ["0-9", "34-43"]
+unify_state_map: null
+num_frames: 33
+video_stride: 4
+window_stride: 1
+split: train
+height: 384
+width: 320
+multiview: true
+camera_layout:
+  - observation.images.fixed_front
+  - observation.images.left_arm
+  - observation.images.right_arm
+target_camera: null
+normalize_mode: min-max
+# Separate Piper-X stats, fitted only on the selected training episodes.
+normalization_stats_path: assets/training_data/piperx_two_tasks/normalization_stats.npy
+color_jitter:
+  enabled: true
+  brightness: 0.2
+  contrast: 0.2
+  saturation: 0.2
+  hue: 0.0
