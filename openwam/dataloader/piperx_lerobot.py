@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 ACTION_MODE = "eef"
 ACTION_STATS_KEY = ACTION_MODE
 STATE_STATS_KEY = f"{ACTION_MODE}_state"
+ACTION_SOURCE_COLUMNS = {"target_action": "action", "future_state": "observation.state"}
 NORMALIZATION_STATS_FILENAME = "piperx_eef_normalization_stats.npy"
 GRIPPER_CONVENTION = "minus1_closed_plus1_open_after_minmax"
 REPRESENTATION = "absolute_dual_piper_x_flange_eef20"
@@ -36,8 +37,15 @@ EXPECTED_JOINT_NAMES = [
 ]
 
 
+def validate_action_source(value: str) -> str:
+    source = str(value).strip().lower()
+    if source not in ACTION_SOURCE_COLUMNS:
+        raise ValueError(f"action_source must be one of {list(ACTION_SOURCE_COLUMNS)}, got {value!r}")
+    return source
+
+
 class PiperXLeRobotDataset(LeRobotV3Reader):
-    """Convert 14-D dual-Piper-X joint targets and state to absolute EEF20."""
+    """Convert commanded joints or next achieved state to absolute EEF20."""
 
     DATASET_NAME = "DualPiperXLeRobot"
     ACTION_DIM = EEF20_DIM
@@ -52,6 +60,7 @@ class PiperXLeRobotDataset(LeRobotV3Reader):
     )
     CONFIG_KEYS = LeRobotV3Reader.CONFIG_KEYS + (
         "action_mode",
+        "action_source",
         "normalization_stats_path",
         "task_indices",
         "excluded_episode_indices",
@@ -62,6 +71,7 @@ class PiperXLeRobotDataset(LeRobotV3Reader):
         dataset_dir: str,
         *,
         action_mode: str = ACTION_MODE,
+        action_source: str = "target_action",
         normalization_stats_path: Optional[str] = None,
         task_indices: Optional[list[int]] = None,
         excluded_episode_indices: Optional[list[int]] = None,
@@ -69,6 +79,7 @@ class PiperXLeRobotDataset(LeRobotV3Reader):
         unify_action_map: Optional[Any] = None,
         **kwargs: Any,
     ):
+        self.action_source = validate_action_source(action_source)
         mode = str(action_mode).strip().lower()
         if mode != ACTION_MODE:
             raise ValueError(f"Dual Piper-X supports only action_mode={ACTION_MODE!r}, got {action_mode!r}")
@@ -158,10 +169,11 @@ class PiperXLeRobotDataset(LeRobotV3Reader):
                 build_and_save_piper_stats,
             )
 
-            logger.info("No Piper EEF stats at %s; scanning the dataset on rank 0", path)
+            logger.info("No Piper-X %s EEF stats at %s; scanning on rank 0", self.action_source, path)
             build_and_save_piper_stats(
                 self._dataset_dir,
                 output=path,
+                action_source=self.action_source,
                 **self._stats_selection(),
             )
             return
@@ -186,6 +198,9 @@ class PiperXLeRobotDataset(LeRobotV3Reader):
         raw = np.load(stats_path, allow_pickle=True).item()
         if not isinstance(raw, dict) or ACTION_STATS_KEY not in raw or STATE_STATS_KEY not in raw:
             raise KeyError(f"{stats_path} must contain {ACTION_STATS_KEY!r} and {STATE_STATS_KEY!r} blocks")
+        # Existing checkpoints/stats without this field were target-action runs.
+        if raw.get("action_source", "target_action") != self.action_source:
+            raise ValueError(f"{stats_path} was computed for a different action_source; use a separate stats file")
         if getattr(self, "_task_indices", None) is not None or getattr(self, "_excluded_episode_indices", []):
             if raw.get("selection") != self._stats_selection():
                 raise ValueError(f"{stats_path} was computed for a different episode/task selection; regenerate it")
@@ -230,8 +245,22 @@ class PiperXLeRobotDataset(LeRobotV3Reader):
         normalized[..., ROT6D_DIMS_EEF20] = raw[..., ROT6D_DIMS_EEF20]
         return normalized
 
+    def _train_min_window_len(self) -> int:
+        # Match RoboDojo: a future-state sample must have one real next state.
+        return 2 if self.action_source == "future_state" else 1
+
+    def _n_supervised_action_steps(self, actual_raw_len: int) -> int:
+        return max(actual_raw_len - 1, 0) if self.action_source == "future_state" else actual_raw_len
+
     def _action_20d(self, win: pd.DataFrame) -> np.ndarray:
-        return self._normalize_eef(self._read_joint14(win, "action"), self._normalization_stats)
+        column = ACTION_SOURCE_COLUMNS[self.action_source]
+        eef = self._normalize_eef(self._read_joint14(win, column), self._normalization_stats)
+        if self.action_source == "future_state":
+            # Shift the whole EEF20, including both grippers. Keep the payload
+            # length expected by the base finalizer; the repeated tail is masked
+            # by _n_supervised_action_steps and never crosses an episode boundary.
+            eef = np.concatenate([eef[1:], eef[-1:]], axis=0)
+        return eef
 
     def _proprio_20d(self, win: pd.DataFrame) -> np.ndarray:
         state = self._read_joint14(win, "observation.state")[:1]
@@ -240,10 +269,12 @@ class PiperXLeRobotDataset(LeRobotV3Reader):
 
 __all__ = [
     "ACTION_MODE",
+    "ACTION_SOURCE_COLUMNS",
     "ACTION_STATS_KEY",
     "GRIPPER_CONVENTION",
     "NORMALIZATION_STATS_FILENAME",
     "PiperXLeRobotDataset",
     "REPRESENTATION",
     "STATE_STATS_KEY",
+    "validate_action_source",
 ]

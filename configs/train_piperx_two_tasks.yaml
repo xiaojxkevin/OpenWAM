@@ -3,6 +3,10 @@ defaults:
   - train
   - override dataloader: piperx_two_tasks
   - _self_
+dataloader:
+  # Select the source for ALL action dimensions: EE pose and both grippers.
+  # target_action = action[t:t+32]; future_state = state[t+1:t+33].
+  action_source: target_action
 training:
   debug: false
   num_epochs: 5

@@ -5,6 +5,9 @@ dataset_dir: data/v3/multitask_merged_v1
 task_indices: [0, 4]
 excluded_episode_indices: [24]
 action_mode: eef
+# target_action: row-aligned commanded joints + grip.
+# future_state: next-frame achieved joints + grip, matching RoboDojo.
+action_source: target_action
 unify_action: true
 unify_action_map: ["0-9", "34-43"]
 unify_state_map: null
@@ -22,7 +25,7 @@ camera_layout:
 target_camera: null
 normalize_mode: min-max
 # Separate Piper-X stats, fitted only on the selected training episodes.
-normalization_stats_path: assets/training_data/piperx_two_tasks/normalization_stats.npy
+normalization_stats_path: assets/training_data/piperx_two_tasks/normalization_stats_${.action_source}.npy
 color_jitter:
   enabled: true
   brightness: 0.2

@@ -11,16 +11,17 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from openwam.dataloader.piperx_lerobot import (
+    ACTION_SOURCE_COLUMNS,
     ACTION_STATS_KEY,
     GRIPPER_CONVENTION,
     NORMALIZATION_STATS_FILENAME,
     REPRESENTATION,
     STATE_STATS_KEY,
+    validate_action_source,
 )
 from openwam.dataloader.utils.normalization import ROT6D_DIMS_EEF20, pin_rot6d_identity
 from openwam.dataloader.utils.piperx_kinematics import joint14_to_eef20
 
-ACTION_COLUMN = "action"
 STATE_COLUMN = "observation.state"
 
 
@@ -49,11 +50,14 @@ def _feature_stats(values: np.ndarray, *, semantics: str) -> dict:
 def compute_piper_stats(
     dataset_dir: str | Path,
     *,
+    action_source: str = "target_action",
     task_indices: list[int] | None = None,
     excluded_episode_indices: list[int] | None = None,
     episode_indices: list[int] | None = None,
 ) -> dict:
     """Fit separate action/state EEF stats on the selected episodes only."""
+    action_source = validate_action_source(action_source)
+    action_column = ACTION_SOURCE_COLUMNS[action_source]
     root = Path(dataset_dir)
     paths = sorted((root / "data").rglob("*.parquet"))
     if not paths:
@@ -70,14 +74,23 @@ def compute_piper_stats(
         if frame.empty:
             continue
         selected_episodes.update(int(i) for i in frame["episode_index"].unique())
-        actions.append(joint14_to_eef20(np.stack(frame[ACTION_COLUMN].values)))
-        states.append(joint14_to_eef20(np.stack(frame[STATE_COLUMN].values)))
+        state_eef = joint14_to_eef20(np.stack(frame[STATE_COLUMN].values))
+        states.append(state_eef)
+        actions.append(
+            state_eef if action_source == "future_state" else joint14_to_eef20(np.stack(frame[action_column].values))
+        )
     if not actions:
         raise ValueError("Piper-X statistics selection contains no frames")
     if episode_indices is not None and selected_episodes != set(episode_indices):
         raise ValueError("Piper-X statistics could not find all selected episodes")
+    action_semantics = (
+        "absolute commanded flange pose"
+        if action_source == "target_action"
+        else "absolute achieved next-state flange pose"
+    )
     return {
-        ACTION_STATS_KEY: _feature_stats(np.concatenate(actions), semantics="absolute commanded flange pose"),
+        "action_source": action_source,
+        ACTION_STATS_KEY: _feature_stats(np.concatenate(actions), semantics=action_semantics),
         STATE_STATS_KEY: _feature_stats(np.concatenate(states), semantics="absolute measured flange pose"),
         "selection": {
             "task_indices": sorted(set(task_indices)) if task_indices is not None else None,
@@ -113,12 +126,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-dir", required=True)
     parser.add_argument("--output", default=None)
+    parser.add_argument("--action-source", choices=list(ACTION_SOURCE_COLUMNS), default="target_action")
     parser.add_argument("--task-indices", type=int, nargs="+", default=None)
     parser.add_argument("--exclude-episodes", type=int, nargs="*", default=[])
     args = parser.parse_args()
     output = build_and_save_piper_stats(
         args.dataset_dir,
         args.output,
+        action_source=args.action_source,
         task_indices=args.task_indices,
         excluded_episode_indices=args.exclude_episodes,
     )
