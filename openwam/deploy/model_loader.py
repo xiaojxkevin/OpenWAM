@@ -62,6 +62,7 @@ def load_from_checkpoint_dir(
     ckpt_dir: str,
     device: str = "cuda",
     ckpt_name: Optional[str] = None,
+    prompt_embeddings_path: Optional[str] = None,
 ) -> Tuple[DictConfig, BaseWAMArchitecture]:
     """Load full model from a self-contained checkpoint directory.
 
@@ -84,6 +85,8 @@ def load_from_checkpoint_dir(
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"config.yaml not found in {ckpt_dir}")
     cfg = OmegaConf.load(config_path)
+    if prompt_embeddings_path is not None and not str(cfg.model.video_backbone.name).startswith("wan"):
+        raise ValueError("Offline prompt embeddings currently require a Wan checkpoint")
 
     # 2. Resolve checkpoint file
     if ckpt_name is not None:
@@ -116,9 +119,22 @@ def load_from_checkpoint_dir(
 
     # Provide video backbone source from config components or model_path.
     vb_components = OmegaConf.select(cfg, "model.video_backbone.components", default=None)
+    if prompt_embeddings_path is not None and vb_components is None:
+        raise ValueError("Offline prompt embeddings require checkpoint-local component and tokenizer specs")
     if vb_components is not None:
         logger.info("Using config-embedded component specs for video-backbone construction")
         vb_cfg_dict = OmegaConf.to_container(cfg.model.video_backbone, resolve=True)
+        if str(cfg.model.video_backbone.name).startswith("wan"):
+            vb_cfg_dict["_deploy_empty_weights"] = True
+        if prompt_embeddings_path is not None:
+            from openwam.deploy.prompt_embeddings import load_prompt_embeddings
+
+            # Validate before allocating any models; only prune the local source
+            # specs. The saved training configuration remains unchanged.
+            load_prompt_embeddings(prompt_embeddings_path, checkpoint_path=ckpt_path, cfg=cfg)
+            vb_cfg_dict["components"] = [c for c in vb_cfg_dict["components"] if c.get("attr") != "text_encoder"]
+            vb_cfg_dict.pop("tokenizer", None)
+            logger.info("Offline prompt embeddings enabled: skipping the Wan text encoder")
         # CosmosPredict25 Reason1 self-containment: the ckpt's Reason1 weights
         # live in the unified safetensors and the small structural artifacts
         # (config.json + tokenizer.json) under ``<ckpt_dir>/reason1/`` —
@@ -203,7 +219,17 @@ def load_from_checkpoint_dir(
     )
 
     # 4. Load all weights from checkpoint
-    architecture.load_checkpoint(ckpt_path)
+    if prompt_embeddings_path is None:
+        architecture.load_checkpoint(ckpt_path)
+    else:
+        from safetensors import safe_open
+
+        from openwam.deploy.prompt_embeddings import TEXT_PREFIX
+
+        with safe_open(ckpt_path, framework="pt", device="cpu") as source:
+            state_dict = {key: source.get_tensor(key) for key in source.keys() if not key.startswith(TEXT_PREFIX)}
+        architecture.load_state_dict(state_dict, strict=True, assign=True)
+        del state_dict
 
     # 5. Move to device and set eval mode — top-down: architecture → video_backbone → submodules.
     _mp = OmegaConf.select(cfg, "training.mixed_precision", default="bf16")

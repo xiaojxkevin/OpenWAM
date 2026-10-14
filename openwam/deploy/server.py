@@ -296,7 +296,9 @@ class PolicyServer:
                             )
                         )
             except websockets.exceptions.ConnectionClosed:
-                logger.info("Client disconnected")
+                pass
+            finally:
+                logger.info("Client disconnected: %s", websocket.remote_address)
 
         async def serve():
             # ping_interval=None: slow inference (notably torch.compile warmup on
@@ -358,7 +360,17 @@ def build_server_from_config(
     deploy_cfg = cfg if cfg is not None else OmegaConf.create({})
     _validate_inference_config(deploy_cfg)
     _normalize_compile_enabled_in_cfg(deploy_cfg)
-    training_cfg, architecture = load_from_checkpoint_dir(ckpt_dir, device=device, ckpt_name=ckpt_name)
+    embeddings_path = OmegaConf.select(deploy_cfg, "optimization.prompt_embed_cache.path")
+    training_cfg, architecture = (
+        load_from_checkpoint_dir(ckpt_dir, device=device, ckpt_name=ckpt_name, prompt_embeddings_path=embeddings_path)
+        if embeddings_path
+        else load_from_checkpoint_dir(ckpt_dir, device=device, ckpt_name=ckpt_name)
+    )
+    if embeddings_path:
+        from openwam.deploy.model_loader import _find_latest_checkpoint
+
+        checkpoint_file = str(Path(ckpt_dir) / ckpt_name) if ckpt_name else _find_latest_checkpoint(ckpt_dir)
+        OmegaConf.update(deploy_cfg, "optimization.prompt_embed_cache.checkpoint_file", checkpoint_file)
     merged = merge_deploy_cfg(training_cfg, deploy_cfg)
     engine = JointInferenceEngine(cfg=merged, architecture=architecture)
     return PolicyServer(engine=engine, cfg=merged, readiness_token=readiness_token)
@@ -467,7 +479,19 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", type=str, default=None, help="WebSocket bind host override.")
     parser.add_argument("--port", type=int, default=None, help="WebSocket port override.")
+    parser.add_argument(
+        "--protocol",
+        choices=("json", "openpi"),
+        default=None,
+        help="Wire protocol: json returns one action per request; openpi returns full Piper-X chunks.",
+    )
     parser.add_argument("--readiness-token", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--prompt-embeddings",
+        type=str,
+        default=None,
+        help="Precomputed Wan prompt embeddings; skips loading the text encoder entirely.",
+    )
     parser.add_argument(
         "--denoise-steps",
         type=int,
@@ -635,6 +659,8 @@ def resolve_deploy_args(args):
     cfg = _load_deploy_yaml(args.config)
     if args.overrides:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.overrides))
+    if getattr(args, "prompt_embeddings", None):
+        OmegaConf.update(cfg, "optimization.prompt_embed_cache.path", args.prompt_embeddings)
 
     cfg = _apply_inference_overrides(cfg, args)
     cfg = _apply_execution_cli_overrides(cfg, args)
@@ -678,6 +704,9 @@ def main(argv: Optional[list[str]] = None):
     server_cfg = getattr(cfg, "server", None)
     host = args.host or getattr(server_cfg, "host", "0.0.0.0")
     port = args.port or getattr(server_cfg, "port", 8848)
+    protocol = args.protocol or str(OmegaConf.select(cfg, "server.protocol", default="json"))
+    if protocol not in ("json", "openpi"):
+        parser.error(f"Unsupported server.protocol: {protocol}")
     server = build_server_from_config(
         cfg=cfg,
         ckpt_dir=ckpt_dir,
@@ -690,6 +719,10 @@ def main(argv: Optional[list[str]] = None):
         OmegaConf.select(server.cfg, "inference.denoise_steps", default=20),
         OmegaConf.select(server.cfg, "inference.denoise_mode", default="sync"),
     )
+    if protocol == "openpi":
+        from openwam.deploy.openpi_server import OpenPIPolicyServer
+
+        server = OpenPIPolicyServer(server.engine, server.cfg)
     server.run(host=host, port=port)
 
 

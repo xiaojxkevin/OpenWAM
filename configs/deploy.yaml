@@ -4,6 +4,7 @@ device: cuda:0
 server:
   host: "0.0.0.0"
   port: 8848                   # WebSocket port
+  protocol: json              # json: single action; openpi: full Piper-X EEF20 chunk
 
 # --- Inference (cfg.inference) ---
 # Every field has a same-name CLI override (--denoise-steps, --inference-mode, ...).
@@ -52,3 +53,4 @@ optimization:
   prompt_embed_cache:
     enabled: true             # false = skip prompt -> text embedding caching entirely
     maxsize: 32               # LRU cap for prompt -> text embeddings cache
+    path: null                # --prompt-embeddings: persistent Wan cache; skip text-encoder loading

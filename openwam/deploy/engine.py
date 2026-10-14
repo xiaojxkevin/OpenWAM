@@ -233,6 +233,21 @@ class JointInferenceEngine(BaseInferenceEngine):
         else:
             self._prompt_embed_cache = None
             logger.info("prompt_embed_cache disabled by config")
+        cache_path = getattr(getattr(optimization, "prompt_embed_cache", None), "path", None)
+        if cache_path:
+            from openwam.deploy.prompt_embeddings import load_prompt_embeddings
+
+            cache_cfg = optimization.prompt_embed_cache
+            # An immutable prompt set: never evict precomputed entries when the
+            # encoder is absent, even if the usual LRU size is configured smaller.
+            self._prompt_embed_cache = load_prompt_embeddings(
+                cache_path,
+                checkpoint_path=cache_cfg.checkpoint_file,
+                cfg=self.cfg,
+                device=self.architecture.device,
+                dtype=self.architecture.dtype,
+            )
+            logger.info("Loaded %d offline prompt embeddings; text encoding bypassed", len(self._prompt_embed_cache))
 
     def _init_cfg(self):
         """Resolve Classifier-Free Guidance from cfg.inference (CosmosPredict25 only; cfg_scale=1.0 is a no-op).

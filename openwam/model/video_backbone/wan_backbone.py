@@ -80,6 +80,7 @@ class WanBase(VideoBackbone):
         self.vace = None
         self.image_encoder = None
         self.motion_controller = None
+        self.text_encoder = None
         # Promote sub-modules to named children so state_dict uses clean prefixes.
         for _name in ("dit", "dit2", "vae", "vace", "vace2", "text_encoder", "image_encoder", "motion_controller"):
             _mod = getattr(holder, _name, None)

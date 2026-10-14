@@ -42,6 +42,8 @@ def encode_text_for_inference(
         return vace_cache["context"], vace_cache["seq_lens"]
     if prompt_embed_cache is not None and prompt in prompt_embed_cache:
         return prompt_embed_cache[prompt]
+    if text_encoder is None:
+        raise ValueError(f"Prompt is absent from the offline embedding cache: {prompt!r}")
     context, seq_lens = encode_text([prompt], tokenizer=tokenizer, text_encoder=text_encoder, device=device)
     if prompt_embed_cache is not None:
         prompt_embed_cache[prompt] = (context, seq_lens)

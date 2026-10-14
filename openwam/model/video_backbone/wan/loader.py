@@ -186,6 +186,7 @@ def build_holder_from_components(
     model_path: str = None,
     *,
     skip_native_vae: bool = False,
+    empty_weights: bool = False,
 ):
     """Build an empty component holder from specs. Weights are NOT
     loaded here (``load_checkpoint`` does that). Tokenizer resolves
@@ -209,8 +210,16 @@ def build_holder_from_components(
             entry["attr"],
             list(kwargs.keys()),
         )
-        with torch.device(device):
-            model = cls(**kwargs)
+        # Deploy restores every parameter from safetensors. Keep buffers and
+        # derived tensors real, but avoid allocating/initializing random weights.
+        if empty_weights:
+            from accelerate import init_empty_weights
+
+            with init_empty_weights(include_buffers=False), torch.device(device):
+                model = cls(**kwargs)
+        else:
+            with torch.device(device):
+                model = cls(**kwargs)
         model.to(dtype=torch.bfloat16)
         setattr(holder, entry["attr"], model)
 
@@ -295,6 +304,7 @@ def build_holder(source, *, skip_native_vae: bool = False, **kw):
                 ckpt_dir=kw.get("ckpt_dir"),
                 model_path=vb_cfg.get("model_path"),
                 skip_native_vae=skip_native_vae,
+                empty_weights=bool(vb_cfg.get("_deploy_empty_weights", False)),
             )
         model_path = vb_cfg.get("model_path") if isinstance(vb_cfg, dict) else getattr(vb_cfg, "model_path", None)
         if model_path is None:
