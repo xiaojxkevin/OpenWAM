@@ -680,8 +680,8 @@ def resolve_deploy_args(args):
     return cfg, ckpt_dir
 
 
-def main(argv: Optional[list[str]] = None):
-    """CLI entrypoint for running the OpenWAM policy server."""
+def _main(argv: Optional[list[str]] = None):
+    """Resolve configuration, load the model and run the selected protocol."""
     from omegaconf import OmegaConf
 
     parser = _build_argparser()
@@ -723,7 +723,19 @@ def main(argv: Optional[list[str]] = None):
         from openwam.deploy.openpi_server import OpenPIPolicyServer
 
         server = OpenPIPolicyServer(server.engine, server.cfg)
-    server.run(host=host, port=port)
+    try:
+        server.run(host=host, port=port)
+    finally:
+        shutdown = getattr(server, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
+
+
+def main(argv: Optional[list[str]] = None):
+    """Standalone CLI with bounded Ctrl+C/SIGTERM shutdown."""
+    from openwam.deploy.shutdown import run_serving_cli
+
+    run_serving_cli(lambda: _main(argv))
 
 
 if __name__ == "__main__":
